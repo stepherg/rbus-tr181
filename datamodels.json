@@ -141,12 +141,12 @@
    },
    {
       "name": "Device.DeviceInfo.Description",
-      "value": "DOCSIS",
+      "value": "Simulator",
       "type": 0
    },
    {
       "name": "Device.DeviceInfo.ProductClass",
-      "value": "CBR",
+      "value": "Simulator",
       "type": 0
    },
    {
