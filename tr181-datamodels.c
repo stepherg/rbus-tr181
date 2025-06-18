@@ -108,32 +108,53 @@ static rbusError_t get_system_serial_number(rbusHandle_t handle, rbusProperty_t 
 
 #else
    // Linux implementation
-   FILE *fp = fopen("/sys/class/dmi/id/product_serial", "r");
-   if (!fp) {
+
+   int sock = socket(AF_INET, SOCK_DGRAM, 0);
+   if (sock < 0) {
       return RBUS_ERROR_BUS_ERROR;
    }
 
-   char *serial = NULL;
-   size_t len = 0;
-   ssize_t read;
+   struct ifreq ifr;
+   struct ifconf ifc;
+   char buf[1024];
+   char mac_str[18] = {0};
+   bool found = false;
 
-   // Read the serial number (typically one line)
-   if ((read = getline(&serial, &len, fp)) != -1) {
-      // Remove trailing newline if present
-      if (serial[read - 1] == '\n') {
-         serial[read - 1] = '\0';
+   ifc.ifc_len = sizeof(buf);
+   ifc.ifc_buf = buf;
+   if (ioctl(sock, SIOCGIFCONF, &ifc) < 0) {
+      close(sock);
+      return RBUS_ERROR_BUS_ERROR;
+   }
+
+   struct ifreq *it = ifc.ifc_req;
+   const struct ifreq *const end = it + (ifc.ifc_len / sizeof(struct ifreq));
+
+   for (; it != end; ++it) {
+      strcpy(ifr.ifr_name, it->ifr_name);
+      if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+         // Skip loopback interfaces
+         if (!(ifr.ifr_flags & IFF_LOOPBACK)) {
+            if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
+               unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+               snprintf(mac_str, sizeof(mac_str),
+                  "%02X%02X%02X%02X%02X%02X",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+               found = true;
+               break;
+            }
+         }
       }
-      // Return a copy of the string to ensure proper memory management
-      char *result = strdup(serial);
-      free(serial);
-      fclose(fp);
+   }
+
+   close(sock);
+
+   if (!found) {
       return RBUS_ERROR_BUS_ERROR;
    }
 
-   rbusValue_SetString(value, serial);
+   rbusValue_SetString(value, mac_str);
 
-   free(serial);
-   fclose(fp);
 #endif
 
    rbusProperty_SetValue(property, value);
@@ -169,7 +190,6 @@ static rbusError_t get_system_uptime(rbusHandle_t handle, rbusProperty_t propert
    rbusValue_t value;
    rbusValue_Init(&value);
 
-
 #ifdef __APPLE__
    // macOS implementation: Get boot time via sysctl and calculate uptime
    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
@@ -201,7 +221,7 @@ static rbusError_t get_system_uptime(rbusHandle_t handle, rbusProperty_t propert
    uint32_t uptime_seconds;
 
    // Read the first value from /proc/uptime (seconds since boot)
-   if (fscanf(fp, "%lf", &uptime_seconds) != 1) {
+   if (fscanf(fp, "%u", &uptime_seconds) != 1) {
       fclose(fp);
       return RBUS_ERROR_BUS_ERROR;
    }
